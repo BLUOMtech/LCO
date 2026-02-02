@@ -1,36 +1,60 @@
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
 <meta charset="UTF-8">
-<title>BLUOM Stream FIXED</title>
+<title>BLUOM Stream Ultimate</title>
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
+<link rel="manifest" href="manifest.json">
 <style>
-body{font-family:Arial;background:#0b0f1a;color:white;text-align:center}
-video{width:45%;margin:10px;background:black;border-radius:10px}
-button,input{margin:5px;padding:10px;border-radius:6px;border:none}
-button{background:#1e90ff;color:white}
+body {margin:0; font-family:Arial, sans-serif; background:#0b0f1a; color:white; text-align:center;}
+header{background:#10182f; padding:10px;}
+input, button{margin:4px; padding:8px; border-radius:6px; border:none;}
+button{background:#1e90ff; color:white;}
+video{width:45%; max-width:400px; margin:5px; border-radius:10px; background:black;}
+#chat{max-height:150px; overflow:auto; background:#111; padding:6px; text-align:left;}
+#rooms{background:#111; padding:6px; margin:6px 0; text-align:left;}
 </style>
 </head>
 <body>
 
-<h2>BLUOM Stream (Fixed)</h2>
-
-<input id="roomIdInput" placeholder="Room ID">
+<header>
+<h2>🚀 BLUOM Stream Ultimate</h2>
+<input id="username" placeholder="Name">
+<input id="roomInput" placeholder="Room ID">
+<input id="passInput" placeholder="Password">
+<br>
 <button id="createBtn">Create Room</button>
 <button id="joinBtn">Join Room</button>
+<button id="camBtn">Camera</button>
+<button id="screenBtn">Screen</button>
+<button id="recordBtn">Record</button>
+<span>👀 <span id="viewers">0</span></span>
+<div id="status"></div>
+</header>
 
-<br>
 <video id="localVideo" autoplay muted playsinline></video>
 <video id="remoteVideo" autoplay playsinline></video>
+
+<div id="rooms"></div>
+<div id="chat"></div>
+<input id="chatInput" placeholder="Chat here...">
 
 <script type="module">
 import { initializeApp } from "https://www.gstatic.com/firebasejs/12.8.0/firebase-app.js";
 import {
-  getFirestore, doc, setDoc, getDoc, updateDoc,
-  collection, addDoc, onSnapshot
+ getFirestore, doc, setDoc, getDoc, updateDoc,
+ collection, addDoc, onSnapshot, getDocs
 } from "https://www.gstatic.com/firebasejs/12.8.0/firebase-firestore.js";
 
-const firebaseConfig={
+// PWA Service Worker
+if ('serviceWorker' in navigator) {
+ navigator.serviceWorker.register('sw.js')
+ .then(()=>console.log("SW registered"))
+ .catch(console.error);
+}
+
+// Firebase config
+const firebaseConfig = {
  apiKey:"AIzaSyBDZmMalbyUmKiTl7CaN5a5Zn-qTIFVI0E",
  authDomain:"live-camera-online.firebaseapp.com",
  projectId:"live-camera-online",
@@ -38,85 +62,147 @@ const firebaseConfig={
  messagingSenderId:"914071703053",
  appId:"1:914071703053:web:c2b59d8750ee04a58b0f44"
 };
+const app = initializeApp(firebaseConfig);
+const db = getFirestore(app);
 
-const app=initializeApp(firebaseConfig);
-const db=getFirestore(app);
+let pc, localStream, roomRef, recorder, chunks = [];
+const lv = document.getElementById("localVideo");
+const rv = document.getElementById("remoteVideo");
+const chatDiv = document.getElementById("chat");
+const roomsDiv = document.getElementById("rooms");
+const viewers = document.getElementById("viewers");
+const status = document.getElementById("status");
 
-let pc, localStream, roomRef;
-
-const localVideo=document.getElementById("localVideo");
-const remoteVideo=document.getElementById("remoteVideo");
-
-async function initPeer(){
- pc=new RTCPeerConnection({
-   iceServers:[{urls:"stun:stun.l.google.com:19302"}]
+async function initPeer() {
+ pc = new RTCPeerConnection({
+   iceServers:[
+     {urls:"stun:stun.l.google.com:19302"},
+     {urls:"turn:openrelay.metered.ca:80", username:"openrelayproject", credential:"openrelayproject"},
+     {urls:"turn:openrelay.metered.ca:443", username:"openrelayproject", credential:"openrelayproject"}
+   ]
  });
-
- pc.ontrack=e=>remoteVideo.srcObject=e.streams[0];
-
- pc.onicecandidate=e=>{
-   if(e.candidate){
-     addDoc(collection(roomRef,"candidates"),e.candidate.toJSON());
-   }
+ pc.ontrack = e => rv.srcObject = e.streams[0];
+ pc.onicecandidate = e => {
+   if(e.candidate) addDoc(collection(roomRef,"candidates"), e.candidate.toJSON());
  };
 }
 
-async function startCam(){
- localStream=await navigator.mediaDevices.getUserMedia({video:true,audio:true});
- localVideo.srcObject=localStream;
- localStream.getTracks().forEach(t=>pc.addTrack(t,localStream));
+// Media functions
+async function setCam() {
+ localStream = await navigator.mediaDevices.getUserMedia({video:true, audio:true});
+ lv.srcObject = localStream;
+ localStream.getTracks().forEach(t => pc.addTrack(t, localStream));
 }
 
-createBtn.onclick=async()=>{
+async function setScreen() {
+ localStream = await navigator.mediaDevices.getDisplayMedia({video:true, audio:true});
+ lv.srcObject = localStream;
+ localStream.getTracks().forEach(t => pc.addTrack(t, localStream));
+}
+
+// Record
+document.getElementById("recordBtn").onclick = () => {
+ if(recorder?.state==="recording"){recorder.stop();return;}
+ chunks=[];
+ recorder = new MediaRecorder(rv.srcObject);
+ recorder.ondataavailable = e => chunks.push(e.data);
+ recorder.onstop = () => {
+  const blob = new Blob(chunks, {type:"video/webm"});
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = "stream.webm";
+  a.click();
+ };
+ recorder.start();
+};
+
+// Camera / Screen buttons
+document.getElementById("camBtn").onclick = setCam;
+document.getElementById("screenBtn").onclick = setScreen;
+
+// Create room
+document.getElementById("createBtn").onclick = async () => {
  await initPeer();
- await startCam();
+ await setCam();
+ roomRef = doc(collection(db,"rooms"));
+ const roomId = roomRef.id;
+ document.getElementById("roomInput").value = roomId;
 
- roomRef=doc(collection(db,"rooms"));
- document.getElementById("roomIdInput").value=roomRef.id;
-
- const offer=await pc.createOffer();
+ const offer = await pc.createOffer();
  await pc.setLocalDescription(offer);
- await setDoc(roomRef,{offer});
+ await setDoc(roomRef, {offer, viewers:1, password:document.getElementById("passInput").value});
+ status.textContent = "Room: "+roomId;
 
- onSnapshot(roomRef,async snap=>{
-   const data=snap.data();
-   if(data.answer && !pc.currentRemoteDescription){
-     await pc.setRemoteDescription(new RTCSessionDescription(data.answer));
+ // Listeners
+ onSnapshot(roomRef, async snap=>{
+   const data = snap.data();
+   viewers.textContent = data?.viewers || 1;
+   if(data?.answer && !pc.currentRemoteDescription){
+     await pc.setRemoteDescription(data.answer);
    }
  });
 
- onSnapshot(collection(roomRef,"candidates"),snap=>{
+ onSnapshot(collection(roomRef,"candidates"), snap=>{
    snap.docChanges().forEach(c=>{
-     if(c.type==="added"){
-       pc.addIceCandidate(new RTCIceCandidate(c.doc.data()));
-     }
+     if(c.type==="added") pc.addIceCandidate(c.doc.data());
    });
  });
+
+ onSnapshot(collection(roomRef,"chat"), snap=>{
+   snap.docChanges().forEach(c=>{
+     chatDiv.innerHTML += c.doc.data().msg + "<br>";
+   });
+ });
+
+ listRooms();
 };
 
-joinBtn.onclick=async()=>{
- const roomId=document.getElementById("roomIdInput").value;
- roomRef=doc(db,"rooms",roomId);
+// Join room
+document.getElementById("joinBtn").onclick = async () => {
+ const roomId = document.getElementById("roomInput").value;
+ roomRef = doc(db,"rooms",roomId);
+ const roomData = (await getDoc(roomRef)).data();
+ if(roomData.password !== document.getElementById("passInput").value){
+   alert("Wrong password"); return;
+ }
 
  await initPeer();
- await startCam();
+ await setCam();
 
- const roomData=(await getDoc(roomRef)).data();
- await pc.setRemoteDescription(new RTCSessionDescription(roomData.offer));
-
- const answer=await pc.createAnswer();
+ await pc.setRemoteDescription(roomData.offer);
+ const answer = await pc.createAnswer();
  await pc.setLocalDescription(answer);
- await updateDoc(roomRef,{answer});
+ await updateDoc(roomRef,{answer, viewers:(roomData.viewers||1)+1});
 
- onSnapshot(collection(roomRef,"candidates"),snap=>{
+ onSnapshot(collection(roomRef,"candidates"), snap=>{
    snap.docChanges().forEach(c=>{
-     if(c.type==="added"){
-       pc.addIceCandidate(new RTCIceCandidate(c.doc.data()));
-     }
+     if(c.type==="added") pc.addIceCandidate(c.doc.data());
+   });
+ });
+
+ onSnapshot(collection(roomRef,"chat"), snap=>{
+   snap.docChanges().forEach(c=>{
+     chatDiv.innerHTML += c.doc.data().msg + "<br>";
    });
  });
 };
-</script>
 
+// Chat
+document.getElementById("chatInput").onkeydown = e => {
+ if(e.key==="Enter" && roomRef){
+   addDoc(collection(roomRef,"chat"), {msg:(document.getElementById("username").value||"Guest")+": "+e.target.value});
+   e.target.value="";
+ }
+};
+
+// Public room list
+async function listRooms(){
+ roomsDiv.innerHTML = "<b>Public Rooms</b><br>";
+ const qs = await getDocs(collection(db,"rooms"));
+ qs.forEach(d => roomsDiv.innerHTML += d.id+"<br>");
+}
+listRooms();
+
+</script>
 </body>
 </html>
