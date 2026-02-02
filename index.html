@@ -1,0 +1,147 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<title>BLUOM Stream</title>
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<link rel="manifest" href="manifest.json">
+<style>
+body{margin:0;font-family:Arial;background:#0b0f1a;color:white}
+header{padding:10px;background:#10182f;position:sticky;top:0}
+video{width:100%;max-width:600px;background:black;border-radius:10px;margin:8px 0}
+button,input{padding:8px;margin:4px;border-radius:6px;border:none}
+button{background:#1e90ff;color:white}
+#rooms{background:#111;padding:8px;margin:6px 0}
+#chat{max-height:150px;overflow:auto;background:#111;padding:6px}
+</style>
+</head>
+<body>
+
+<header>
+<h3>🚀 BLUOM Stream</h3>
+<input id="username" placeholder="Name">
+<input id="roomInput" placeholder="Room ID">
+<input id="passInput" placeholder="Password">
+<br>
+<button id="createBtn">Create</button>
+<button id="joinBtn">Join</button>
+<button id="camBtn">Camera</button>
+<button id="screenBtn">Screen</button>
+<button id="recordBtn">Record</button>
+<span>👀 <span id="viewers">0</span></span>
+<div id="status"></div>
+</header>
+
+<video id="localVideo" autoplay muted playsinline></video>
+<video id="remoteVideo" autoplay playsinline></video>
+
+<div id="rooms"></div>
+
+<div id="chat"></div>
+<input id="chatInput" placeholder="Chat...">
+
+<script type="module">
+import { initializeApp } from "https://www.gstatic.com/firebasejs/12.8.0/firebase-app.js";
+import {
+ getFirestore, doc, setDoc, getDoc, updateDoc,
+ collection, addDoc, onSnapshot, deleteDoc, getDocs
+} from "https://www.gstatic.com/firebasejs/12.8.0/firebase-firestore.js";
+
+navigator.serviceWorker.register("sw.js");
+
+const firebaseConfig={
+ apiKey:"AIzaSyBDZmMalbyUmKiTl7CaN5a5Zn-qTIFVI0E",
+ authDomain:"live-camera-online.firebaseapp.com",
+ projectId:"live-camera-online",
+ storageBucket:"live-camera-online.firebasestorage.app",
+ messagingSenderId:"914071703053",
+ appId:"1:914071703053:web:c2b59d8750ee04a58b0f44"
+};
+
+const app=initializeApp(firebaseConfig);
+const db=getFirestore(app);
+
+const pc=new RTCPeerConnection({iceServers:[{urls:"stun:stun.l.google.com:19302"}]});
+let localStream,roomRef,rec,chunks=[];
+
+pc.ontrack=e=>remoteVideo.srcObject=e.streams[0];
+
+async function setStream(s){
+ if(localStream) localStream.getTracks().forEach(t=>t.stop());
+ localStream=s;
+ localVideo.srcObject=s;
+ pc.getSenders().forEach(s=>pc.removeTrack(s));
+ s.getTracks().forEach(t=>pc.addTrack(t,s));
+}
+
+camBtn.onclick=async()=>setStream(await navigator.mediaDevices.getUserMedia({video:true,audio:true}));
+screenBtn.onclick=async()=>setStream(await navigator.mediaDevices.getDisplayMedia({video:true,audio:true}));
+
+recordBtn.onclick=()=>{
+ if(rec?.state==="recording"){rec.stop();return;}
+ chunks=[];
+ rec=new MediaRecorder(remoteVideo.srcObject);
+ rec.ondataavailable=e=>chunks.push(e.data);
+ rec.onstop=()=>{
+  const b=new Blob(chunks,{type:"video/webm"});
+  const a=document.createElement("a");
+  a.href=URL.createObjectURL(b);
+  a.download="stream.webm";
+  a.click();
+ };
+ rec.start();
+};
+
+createBtn.onclick=async()=>{
+ await setStream(await navigator.mediaDevices.getUserMedia({video:true,audio:true}));
+ roomRef=doc(collection(db,"rooms"));
+ await setDoc(roomRef,{password:passInput.value,viewers:1});
+ status.textContent="Room: "+roomRef.id;
+
+ const offer=await pc.createOffer();
+ await pc.setLocalDescription(offer);
+ await updateDoc(roomRef,{offer});
+
+ listenRoom(roomRef);
+ listRooms();
+};
+
+joinBtn.onclick=async()=>{
+ roomRef=doc(db,"rooms",roomInput.value);
+ const d=(await getDoc(roomRef)).data();
+ if(d.password!==passInput.value){alert("Wrong password");return;}
+ await setStream(await navigator.mediaDevices.getUserMedia({video:true,audio:true}));
+ await pc.setRemoteDescription(d.offer);
+ const ans=await pc.createAnswer();
+ await pc.setLocalDescription(ans);
+ await updateDoc(roomRef,{answer:ans,viewers:d.viewers+1});
+ listenRoom(roomRef);
+};
+
+function listenRoom(ref){
+ onSnapshot(ref,s=>viewers.textContent=s.data().viewers||1);
+ onSnapshot(collection(ref,"chat"),s=>{
+  s.docChanges().forEach(c=>{
+   chat.innerHTML+=c.doc.data().msg+"<br>";
+  });
+ });
+}
+
+chatInput.onkeydown=e=>{
+ if(e.key==="Enter"&&roomRef){
+  addDoc(collection(roomRef,"chat"),{
+   msg:(username.value||"Guest")+": "+chatInput.value
+  });
+  chatInput.value="";
+ }
+};
+
+async function listRooms(){
+ const qs=await getDocs(collection(db,"rooms"));
+ rooms.innerHTML="<b>Public Rooms</b><br>";
+ qs.forEach(d=>rooms.innerHTML+=d.id+"<br>");
+}
+listRooms();
+</script>
+</body>
+</html>
